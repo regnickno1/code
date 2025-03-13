@@ -1,17 +1,54 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div class="bg-white shadow-md rounded-lg p-6 text-center">
-    <h1 class="text-2xl font-bold mb-4">Welcome to Book Manager</h1>
-    <p class="mb-6">This application allows you to manage books and authors in your database.</p>
-    
-    <div class="flex justify-center space-x-4">
-        <a href="{{ url_for('list_books') }}" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded">
-            View Books
-        </a>
-        <a href="{{ url_for('list_authors') }}" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded">
-            View Authors
-        </a>
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card shadow-lg border-0 rounded-3 overflow-hidden">
+            <div class="card-body p-5 text-center">
+                <i class="bi bi-book display-1 text-primary mb-4"></i>
+                <h1 class="display-5 fw-bold mb-4">Welcome to Book Manager</h1>
+                <p class="lead text-muted mb-5">Manage your books, authors, and catalogues with ease.</p>
+                
+                <div class="row g-4 justify-content-center">
+                    <div class="col-md-4">
+                        <div class="card h-100 border-0 shadow-sm">
+                            <div class="card-body text-center p-4">
+                                <i class="bi bi-journal-text text-primary display-5 mb-3"></i>
+                                <h5 class="card-title">Books</h5>
+                                <p class="card-text text-muted">Manage your book collection</p>
+                                <a href="{{ url_for('list_books') }}" class="btn btn-outline-primary">
+                                    View Books
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card h-100 border-0 shadow-sm">
+                            <div class="card-body text-center p-4">
+                                <i class="bi bi-person text-success display-5 mb-3"></i>
+                                <h5 class="card-title">Authors</h5>
+                                <p class="card-text text-muted">Manage your authors</p>
+                                <a href="{{ url_for('list_authors') }}" class="btn btn-outline-success">
+                                    View Authors
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card h-100 border-0 shadow-sm">
+                            <div class="card-body text-center p-4">
+                                <i class="bi bi-collection text-info display-5 mb-3"></i>
+                                <h5 class="card-title">Catalogues</h5>
+                                <p class="card-text text-muted">Organize your books</p>
+                                <a href="{{ url_for('list_catalogues') }}" class="btn btn-outline-info">
+                                    View Catalogues
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}

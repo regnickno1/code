@@ -3,56 +3,58 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block content %}
-<div class="bg-white shadow-md rounded-lg p-6">
-    <h1 class="text-2xl font-bold mb-6">{{ title }}</h1>
+<div class="card">
+    <div class="card-body">
+        <h1 class="card-title mb-4">{{ title }}</h1>
 
-    <form method="POST" class="space-y-4">
-        {{ form.hidden_tag() }}
-        
-        <div>
-            <label for="{{ form.title.id }}" class="block text-sm font-medium text-gray-700">Title</label>
-            {{ form.title(class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring focus:ring-blue-500 focus:ring-opacity-50") }}
-            {% if form.title.errors %}
-                {% for error in form.title.errors %}
-                    <p class="text-red-500 text-sm mt-1">{{ error }}</p>
-                {% endfor %}
-            {% endif %}
-        </div>
-        
-        <div>
-            <label for="{{ form.author_id.id }}" class="block text-sm font-medium text-gray-700">Author</label>
-            {{ form.author_id(class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring focus:ring-blue-500 focus:ring-opacity-50") }}
-            {% if form.author_id.errors %}
-                {% for error in form.author_id.errors %}
-                    <p class="text-red-500 text-sm mt-1">{{ error }}</p>
-                {% endfor %}
-            {% endif %}
-        </div>
-        
-        <div>
-            <label for="{{ form.catalogue_id.id }}" class="block text-sm font-medium text-gray-700">Catalogue</label>
-            {{ form.catalogue_id(class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring focus:ring-blue-500 focus:ring-opacity-50") }}
-            {% if form.catalogue_id.errors %}
-                {% for error in form.catalogue_id.errors %}
-                    <p class="text-red-500 text-sm mt-1">{{ error }}</p>
-                {% endfor %}
-            {% endif %}
-        </div>
+        <form method="POST">
+            {{ form.hidden_tag() }}
+            
+            <div class="mb-3">
+                <label for="{{ form.title.id }}" class="form-label">Title</label>
+                {{ form.title(class="form-control" + (" is-invalid" if form.title.errors else "")) }}
+                {% if form.title.errors %}
+                    {% for error in form.title.errors %}
+                        <div class="invalid-feedback">{{ error }}</div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+            
+            <div class="mb-3">
+                <label for="{{ form.author_id.id }}" class="form-label">Author</label>
+                {{ form.author_id(class="form-select" + (" is-invalid" if form.author_id.errors else "")) }}
+                {% if form.author_id.errors %}
+                    {% for error in form.author_id.errors %}
+                        <div class="invalid-feedback">{{ error }}</div>
+                    {% endfor %}
+                {% endif %}
+            </div>
 
-        <div>
-            <label for="{{ form.year_published.id }}" class="block text-sm font-medium text-gray-700">Year Published</label>
-            {{ form.year_published(class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring focus:ring-blue-500 focus:ring-opacity-50") }}
-            {% if form.year_published.errors %}
-                {% for error in form.year_published.errors %}
-                    <p class="text-red-500 text-sm mt-1">{{ error }}</p>
-                {% endfor %}
-            {% endif %}
-        </div>
-        
-        <div class="flex justify-between pt-4">
-            <a href="{{ url_for('list_books') }}" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">Cancel</a>
-            {{ form.submit(class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded") }}
-        </div>
-    </form>
+            <div class="mb-3">
+                <label for="{{ form.catalogue_id.id }}" class="form-label">Catalogue</label>
+                {{ form.catalogue_id(class="form-select" + (" is-invalid" if form.catalogue_id.errors else "")) }}
+                {% if form.catalogue_id.errors %}
+                    {% for error in form.catalogue_id.errors %}
+                        <div class="invalid-feedback">{{ error }}</div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+
+            <div class="mb-4">
+                <label for="{{ form.year_published.id }}" class="form-label">Year Published</label>
+                {{ form.year_published(class="form-control" + (" is-invalid" if form.year_published.errors else "")) }}
+                {% if form.year_published.errors %}
+                    {% for error in form.year_published.errors %}
+                        <div class="invalid-feedback">{{ error }}</div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+            
+            <div class="d-flex gap-2">
+                <a href="{{ url_for('list_books') }}" class="btn btn-secondary">Cancel</a>
+                {{ form.submit(class="btn btn-primary") }}
+            </div>
+        </form>
+    </div>
 </div>
 {% endblock %}
