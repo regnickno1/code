@@ -1,0 +1,1087 @@
+$logFilePath = "C:\Users\Public\hunting_$(Get-Date -Format 'yyyyMMddHHmmss').log"
+
+function Get-IPv4 {
+    $ip = "0.0.0.0"
+
+    try {
+        $ipv4 = (Get-WmiObject -Class Win32_NetworkAdapterConfiguration -Filter 'ipenabled = "true"').IPAddress | Where-Object { $_ -match "[\d]{1,3}.[\d]{1,3}.[\d]{1,3}.[\d]{1,3}" }
+        if ($ipv4.count -gt 1) {
+            $ip = $ipv4[0]
+        }
+        else {
+            $ip = $ipv4
+        }
+    }
+    catch {
+        $errorlog = "+ [Get-IPv4]: Error $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+    return $ip
+}
+
+function Get-MAC {
+    $MAC = "00:00:00:00:00:00"
+
+    try {
+        $colItems = get-wmiobject -class "Win32_NetworkAdapterConfiguration" -computername localhost | Where-Object { $_.IpEnabled -Match "True" }
+        if ($colItems.count -gt 1) {
+            $MAC = $colItems[0].MACAddress
+        }
+        else {
+            $MAC = $colItems.MACAddress
+        }
+    }
+    catch {
+        $errorlog = "+ [Get-MAC]: Error $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+    return $MAC
+}
+
+function Base64Decode {
+    try {
+        $autorun = "autorun_base64_here"
+
+        $file = [System.Convert]::FromBase64String($autorun)
+        [io.file]::WriteAllBytes("$($env:TEMP)\\Logs\\autorunsc.gz", $file)
+        [system.gc]::Collect()
+    }
+    catch {
+        $errorlog = "+ [Base64Decode]: Error $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+}
+
+Function UncompressGZipFile {
+    Param(
+        $infile
+    )
+
+    try {
+        $outfile = ($infile -replace '\.gz$', '.exe')
+        $input_data = New-Object System.IO.FileStream $inFile, ([IO.FileMode]::Open), ([IO.FileAccess]::Read), ([IO.FileShare]::Read)
+        $gzipStream = New-Object System.IO.Compression.GzipStream $input_data, ([IO.Compression.CompressionMode]::Decompress)
+        $stream = new-object -TypeName System.IO.MemoryStream
+        $buffer = New-Object byte[](1024)
+        do {
+            $count = $gzipstream.Read($buffer, 0, 1024)
+            if ($count -gt 0) {
+                $Stream.Write($buffer, 0, $count)
+            }
+        }
+        While ($count -gt 0)
+        $array = $stream.ToArray()
+        $array | Set-Content $outfile -Encoding Byte
+        $gzipStream.Close()
+        $stream.Close()
+        $input_data.Close()
+        [system.gc]::Collect()
+    }
+    catch {
+        $errorlog = "+ [UncompressGZipFile]: Error $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+}
+
+function Get-Autorunsc { 
+    $entries = $null
+
+    try {
+        Base64Decode
+        UncompressGZipFile "$($env:TEMP)\\Logs\\autorunsc.gz"
+    }
+    catch {
+        $errorlog = "+ [Get-Autorunsc]: Error $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+
+    if (Test-Path "$($env:TEMP)\\Logs\\autorunsc.exe") {
+        try {
+            $md5 = (Get-FileHash -Path "$($env:TEMP)\\Logs\\autorunsc.exe" -Algorithm MD5 -ErrorAction Stop).Hash
+        } catch {
+            $md5 = "Access denied"
+        }
+
+        $count = 0
+        while ($md5 -ne "A14F54260A2D8EB51AE9D91B38B6C972") {
+            if ($count -eq 3) {
+                $errorlog = "+ [Get-Autorunsc]: Cannot write file Autorunsc.exe"
+                Add-Content -Path $logFilePath -Value $errorlog
+                return $entries
+            }
+            $count = $count + 1
+            Base64Decode
+            UncompressGZipFile "$($env:TEMP)\\Logs\\autorunsc.gz"
+            try {
+                $md5 = (Get-FileHash -Path "$($env:TEMP)\\Logs\\autorunsc.exe" -Algorithm MD5 -ErrorAction Stop).Hash
+            } catch {
+                $md5 = "Access denied"
+            }
+        }
+
+        try {
+            $entries = .\autorunsc.exe /accepteula -a * -c -h -s '*' -m -nobanner 2> $null | ConvertFrom-Csv |
+            Select-Object * -ExcludeProperty IMP, "PESHA-1", "PESHA-256", "SHA-1", "SHA-256" |
+            Where-Object { $_."Image Path".length -ne 0 } | 
+        ForEach-Object {	
+			
+            $entry = [PSCustomObject]@{
+                EntryName   = ($_.Description -split ':')[0] 
+                StartTime   = $_.Time                        
+                Entry       = $_.Entry
+                Category    = $_.Category
+                EntryLocation = $_."Entry Location"
+                Signer      = $_.Signer
+                CommandLine = $_."Launch String"             
+                ImagePath   = $_."Image Path"                
+                MD5         = $_.MD5
+                Module      = "Autoruns Entries"                         
+            }		
+			
+			try {
+				if (![string]::IsNullOrEmpty($entry.StartTime) -and $entry.StartTime -ne "N/A") {
+					if ($entry.StartTime -match '^\d{1,2}/\d{1,2}/\d{4} \d{1,2}:\d{2} (AM|PM)$') {
+						$entry.StartTime = [datetime]::ParseExact($entry.StartTime, "M/d/yyyy h:mm tt", $null).ToString("yyyy/MM/dd HH:mm:ss")
+					}
+				}
+				else {
+					$entry.StartTime = "0000/00/00 00:00:00"
+				}
+			}
+			catch {
+				$entry.StartTime = "0000/00/00 00:00:00"
+			}
+
+            # Lấy CreatedTime và ModifiedTime từ ImagePath (nếu file tồn tại)
+            if (Test-Path -Path $entry.ImagePath) {
+                try {
+                    $file = Get-Item -Path $entry.ImagePath
+                    # Chuyển CreatedTime và ModifiedTime sang định dạng yyyy/MM/dd hh:mm:ss
+                    $entry | Add-Member -MemberType NoteProperty -Name CreatedTime -Value ($file.CreationTime.ToString("yyyy/MM/dd HH:mm:ss"))
+                    $entry | Add-Member -MemberType NoteProperty -Name ModifiedTime -Value ($file.LastWriteTime.ToString("yyyy/MM/dd HH:mm:ss"))
+                }
+                catch {
+                    $entry | Add-Member -MemberType NoteProperty -Name CreatedTime -Value "0000/00/00 00:00:00"
+                    $entry | Add-Member -MemberType NoteProperty -Name ModifiedTime -Value "0000/00/00 00:00:00"
+                }
+            } else {
+                $entry | Add-Member -MemberType NoteProperty -Name CreatedTime -Value "0000/00/00 00:00:00"
+                $entry | Add-Member -MemberType NoteProperty -Name ModifiedTime -Value "0000/00/00 00:00:00"
+            }
+
+            # Xuất đối tượng này ra ngoài
+            $entry
+        }
+        }
+        catch {
+            $errorlog = "+ [Get-Autorunsc]: Cannot get time of file $($entry.ImagePath) - $($_.Exception.Message)"
+            Add-Content -Path $logFilePath -Value $errorlog
+        }
+    }
+    else {
+        $errorlog = "+ [Get-Autorunsc]: Autorunsc.exe not found"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+
+    return $entries
+}
+
+function Get-Signer {
+    param (
+        [Parameter(Mandatory = $true, Position = 1)]
+        [string]$FilePath
+    )
+
+    $signer = "N/A";
+    if (Test-Path -Path $FilePath -PathType Leaf ) {
+        try {
+            $sign = Get-AuthenticodeSignature -FilePath $FilePath
+            if ($sign.Status -eq "Valid") {
+                $dnDict = ($sign.SignerCertificate.Subject -split ', ') | ForEach-Object {
+                    $dnDict = @{}
+                    $item = $_.Split('='); $dnDict[$item[0]] = $item[1]
+                    $dnDict
+                }
+                $s = "(Verified) $($dnDict."O")"
+                $signer = $s.Replace('"', '')
+                return $signer
+            }
+        }
+        catch {
+            $signer = "Access denied"
+        }
+    }
+	
+	return $signer
+}
+
+function Get-UnsignedProcessesAndDlls {
+    $unsignedItems = @()
+
+    $processes = Get-Process
+    #check process
+    for ($i = 0; $i -lt $processes.Count; $i++) {
+        $process = $processes[$i]        
+        #Write-Host "    + Checking process $($process.ProcessName) (PID: $($process.Id)) ..."
+        try {
+            $processInfo = @{
+                ImagePath   = "Access denied"
+                Module      = "Process Scanning"
+                Category    = "Process"
+                MD5         = "Access denied"
+                CreatedTime = "0000/00/00 00:00:00"
+                ModifiedTime= "0000/00/00 00:00:00"
+                CommandLine = "Access denied"
+                PID         = $process.Id
+                StartTime   = "0000/00/00 00:00:00"
+                Owner       = "Access denied"
+                EntryName   = $process.ProcessName
+            }
+
+            $processPath = $process.Path
+            if ($processPath) {
+                try {
+                    $signature = Get-AuthenticodeSignature -FilePath $processPath
+                    if ($signature.Status -ne 'Valid') {
+                        #Write-Host "    -> Detect process $($process.ProcessName) (PID: $($process.Id)) not signed!!!"
+                        try {
+                            $fileInfo = Get-Item -Path $processPath
+                            $processInfo.MD5 = (Get-FileHash -Path $fileInfo.FullName -Algorithm MD5).Hash
+                            $processInfo.CreatedTime = $fileInfo.CreationTime.ToString("yyyy/MM/dd HH:mm:ss")
+                            $processInfo.ModifiedTime = $fileInfo.LastWriteTime.ToString("yyyy/MM/dd HH:mm:ss")
+                        } catch {
+                        }
+                        
+                        try {
+                            $owner = (Get-Acl -Path $processPath).Owner
+                            $processInfo.Owner = $owner
+                        } catch {
+                        }
+
+                        $processInfo.ImagePath = $processPath
+                        $processInfo.StartTime = $process.StartTime.ToString("yyyy/MM/dd HH:mm:ss")
+                        $processInfo.CommandLine = $process.CommandLine
+
+                        $unsignedItems += $processInfo
+                    }
+                } 
+                catch {
+                    $errorlog = "+ [Get-UnsignedProcessesAndDlls]: Cannot access process $($processPath) to get information. Error - $($_.Exception.Message)"
+                    Add-Content -Path $logFilePath -Value $errorlog
+                }
+
+                # check dll loaded
+                for ($j = 0; $j -lt $process.Modules.Count; $j++) {
+                    $module = $process.Modules[$j]
+                    $dllInfo = @{
+                        ImagePath   = "Access denied"
+                        Module      = "Process Scanning"
+                        Category    = "DLL Loaded"
+                        MD5         = "Access denied"
+						Owner       = "Access denied"
+                        CreatedTime = "0000/00/00 00:00:00"
+                        ModifiedTime= "0000/00/00 00:00:00"
+                        PID         = $process.Id
+                        StartTime   = $process.StartTime.ToString("yyyy/MM/dd HH:mm:ss")
+                        EntryName   = $process.Path
+                    }
+
+                    try {
+                        if ($module.FileName) {
+                            $dllSignature = Get-AuthenticodeSignature -FilePath $module.FileName
+                            if ($dllSignature.Status -ne 'Valid') {
+                                #Write-Host "    -> Detect dll $($module.FileName) not signed!!!"
+                                $dllInfo.ImagePath = $module.FileName
+
+                                try {
+                                    $dllFileInfo = Get-Item -Path $module.FileName
+                                    $dllInfo.MD5 = (Get-FileHash -Path $dllFileInfo.FullName -Algorithm MD5).Hash
+                                    $dllInfo.CreatedTime = $dllFileInfo.CreationTime.ToString("yyyy/MM/dd HH:mm:ss")
+                                    $dllInfo.ModifiedTime = $dllFileInfo.LastWriteTime.ToString("yyyy/MM/dd HH:mm:ss")
+                                } catch {
+                                }
+
+                                try {
+                                    $dllOwner = (Get-Acl -Path $module.FileName).Owner
+                                    $dllInfo.Owner = $dllOwner
+                                } catch {
+                                    $dllInfo.Owner = "Access denied"
+                                }
+
+                                # add to list
+                                $unsignedItems += $dllInfo
+                            }
+                        }
+                    } catch {
+                        $errorlog = "+ [Get-UnsignedProcessesAndDlls]: Cannot access dll $($module.ModuleName) to get information. Error - $($_.Exception.Message)"
+                        Add-Content -Path $logFilePath -Value $errorlog
+                    }
+                }
+            }
+        } catch {
+            $errorlog = "+ [Get-UnsignedProcessesAndDlls]: Cannot access process $($processPath) to get information. Error - $($_.Exception.Message)"
+            Add-Content -Path $logFilePath -Value $errorlog
+        }
+    }
+
+    return $unsignedItems
+}
+
+function Get-FileInfo {
+    param (
+        [System.IO.FileInfo] $file
+    )
+    $fileinfo = $null
+    if (Test-Path -Path $file.FullName -PathType Leaf) {
+        try {
+            # Initialize file information object
+            $fileinfo = @{
+                ImagePath   = $file.FullName
+                Module      = "Common Files"
+                Category    = "File"
+                MD5         = "N/A"
+                CreatedTime = "0000/00/00 00:00:00"
+                ModifiedTime= "0000/00/00 00:00:00"
+                Owner       = "N/A"
+                Signer      = "N/A"
+            }
+
+            # Try to get the MD5 hash, creation, and modification times
+            try {
+                $md5 = (Get-FileHash -Path $file.FullName -Algorithm MD5 -ErrorAction Stop).Hash
+                $fileinfo.MD5 = $md5
+            } catch {
+                $fileinfo.MD5 = "Access denied"
+            }
+
+            # Try to get CreatedTime and ModifiedTime in 'yyyyMMdd hhmmss' format
+            $fileinfo.CreatedTime = $file.CreationTime.ToString("yyyy/MM/dd HH:mm:ss")
+            $fileinfo.ModifiedTime = $file.LastWriteTime.ToString("yyyy/MM/dd HH:mm:ss")
+
+            # Try to get the file owner
+            try {
+                $fileinfo.Owner = (Get-Acl -Path $file.FullName -ErrorAction Stop).Owner
+            } catch {
+                $fileinfo.Owner = "Access denied"
+            }
+
+            # Try to get the signature
+            try {
+                $fileInfo.Signer = Get-Signer $file.FullName
+            } catch {
+                $fileinfo.Signer = "Access denied"
+            }
+        } catch {
+        }
+    }
+
+    return $fileinfo
+}
+
+function Get-OverwrittenBackdoor {
+    $filePaths = @(
+        "$env:SYSTEMDRIVE\Windows\system32\atbroker.exe",
+        "$env:SYSTEMDRIVE\Windows\system32\displayswitch.exe",
+        "$env:SYSTEMDRIVE\Windows\system32\magnify.exe",
+        "$env:SYSTEMDRIVE\Windows\system32\narrator.exe",
+        "$env:SYSTEMDRIVE\Windows\system32\osk.exe",
+        "$env:SYSTEMDRIVE\Windows\system32\sethc.exe",
+        "$env:SYSTEMDRIVE\Windows\system32\utilman.exe",
+        "$env:SYSTEMDRIVE\Windows\syswow64\atbroker.exe",
+        "$env:SYSTEMDRIVE\Windows\syswow64\displayswitch.exe",
+        "$env:SYSTEMDRIVE\Windows\syswow64\magnify.exe",
+        "$env:SYSTEMDRIVE\Windows\syswow64\narrator.exe",
+        "$env:SYSTEMDRIVE\Windows\syswow64\osk.exe",
+        "$env:SYSTEMDRIVE\Windows\syswow64\sethc.exe",
+        "$env:SYSTEMDRIVE\Windows\syswow64\utilman.exe"
+    )
+
+    $fileInfos = @()
+    foreach ($filePath in $filePaths) {
+        if (Test-Path -Path $filePath) {
+            try {
+                $fileInfo = @{
+                    ImagePath   = $filePath
+                    Module      = "Overwritten backdoor"
+                    Category    = "File"
+                    MD5         = "N/A"
+                    CreatedTime = "0000/00/00 00:00:00"
+                    ModifiedTime= "0000/00/00 00:00:00"
+                    Owner       = "N/A"
+                    Signer      = "N/A"
+                }
+
+                $file = Get-Item -Path $filePath
+                $fileInfo.CreatedTime = $file.CreationTime.ToString("yyyy/MM/dd HH:mm:ss")
+                $fileInfo.ModifiedTime = $file.LastWriteTime.ToString("yyyy/MM/dd HH:mm:ss")
+                $fileInfo.Signer = Get-Signer $filePath
+                
+                try {
+                    $fileInfo.MD5 = (Get-FileHash -Path $filePath -Algorithm MD5 -ErrorAction Stop).Hash
+                    $fileInfo.Owner = (Get-Acl -Path $filePath -ErrorAction Stop).Owner
+                } catch {
+                    $fileInfo.MD5 = "Access denied"
+                    $fileInfo.Owner = "Access denied"
+                }
+
+                $fileInfos += $fileInfo
+
+            } catch {
+                $errorlog = "+ [Get-OverwrittenBackdoor]: Error $($_.Exception.Message)"
+                Add-Content -Path $logFilePath -Value $errorlog
+            }
+        }
+    }
+
+    return $fileInfos
+}
+
+function Get-CommonFiles {
+    # Define the directories to scan
+    $directories = @(
+        "$env:SYSTEMDRIVE\", 
+        "$env:SYSTEMDRIVE\Windows",
+        "$env:SYSTEMDRIVE\Windows\Temp",
+        "$env:SYSTEMDRIVE\Users\Public",
+        "$env:SYSTEMDRIVE\ProgramData",
+        "$env:SYSTEMDRIVE\Program Files\Common Files",
+        "$env:SYSTEMDRIVE\Program Files (x86)\Common Files",
+        "$env:SYSTEMDRIVE\Windows\Tasks",
+        "$env:SYSTEMDRIVE\Windows\System32\Tasks"
+    )
+
+    # Initialize an array to store file info
+    $fileInfos = @()
+
+    foreach ($directory in $directories) {
+        try {
+            # Get all files in the directory (non-recursive) including hidden and system files
+            $files = Get-ChildItem -Path $directory -File -Force -ErrorAction SilentlyContinue
+
+            foreach ($file in $files) {
+                $fileInfo = Get-FileInfo -file $file
+                if ($fileInfo) {
+                    $fileInfos += $fileinfo
+                }
+            }
+        } catch {
+            $errorlog = "+ [Get-CommonFiles]: Cannot access folder $($directory). Error $($_.Exception.Message)"
+            Add-Content -Path $logFilePath -Value $errorlog
+        }
+    }
+
+    # appdata path
+    try {
+        $userDirs = Get-ChildItem -Path "$env:SYSTEMDRIVE\Users" -Directory -ErrorAction SilentlyContinue
+        foreach ($userDir in $userDirs) {
+            $appDataPaths = @(
+                [System.IO.Path]::Combine($userDir.FullName, "AppData\Roaming"),
+                [System.IO.Path]::Combine($userDir.FullName, "AppData\Local"),
+                [System.IO.Path]::Combine($userDir.FullName, "AppData\Local\Temp")
+            )
+
+            foreach ($appDataPath in $appDataPaths) {
+				try {
+					if (Test-Path -Path $appDataPath -PathType Container) {
+						$files = Get-ChildItem -Path $appDataPath -File -Force -ErrorAction SilentlyContinue
+						foreach ($file in $files) {
+							$fileInfo = Get-FileInfo -file $file.FullName
+							if ($fileInfo) {
+								$fileInfos += $fileinfo
+							}
+						}
+					}
+				}
+				catch {
+					$errorlog = "+ [Get-CommonFiles]: Path $($appDataPath). Error $($_.Exception.Message)"
+					Add-Content -Path $logFilePath -Value $errorlog
+				}
+            }
+        }
+    }
+    catch {
+        $errorlog = "+ [Get-CommonFiles]: Get child items of appdata path. Error $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+
+    return $fileInfos
+}
+
+function Get-RegKeyAbnormally {
+    # Danh sách các registry key cần kiểm tra
+    $regKeys = @(
+        @{ Path = "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SilentProcessExit"; Value = $null },
+        @{ Path = "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Custom"; Value = $null },
+        @{ Path = "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\InstalledSDB"; Value = $null },
+        @{ Path = "HKLM\SYSTEM\CurrentControlSet\Control\Lsa"; Value = "Security Packages" },
+        @{ Path = "HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest"; Value = "UseLogonCredential" }
+    )
+
+    # Mảng để lưu trữ kết quả
+    $keys = @()
+
+    foreach ($regKey in $regKeys) {
+        $keyPath = $regKey.Path
+        $keyValueName = $regKey.Value
+
+        try {
+            if (Test-Path "Registry::$keyPath") {
+                if ($keyValueName) {
+                    try {
+                        $keyValue = (Get-ItemProperty -Path "Registry::$keyPath" -Name $keyValueName -ErrorAction Stop)
+                        $keyData = $keyValue.$keyValueName
+                    }
+                    catch {
+                        $keyData = "Access denied"
+                    }
+
+                    $keys += @{
+                        "Module"            = "Key Abnormally"
+                        "Category"          = "key"
+                        "EntryLocation"    	= $keyPath
+                        "Entry"             = $keyValueName
+                        "Data"              = $keyData
+                    }
+                }
+                else {
+                    try {
+                        $keyValues = Get-ItemProperty -Path "Registry::$keyPath" -ErrorAction Stop
+                        foreach ($prop in $keyValues.PSObject.Properties) {
+                            $keyData = $prop.Value
+                            $keys += @{
+                                "Module"            = "Key Abnormally"
+                                "Category"          = "key"
+                                "Entry Location"    = "$keyPath\$($prop.Name)"
+                                "Entry"             = $prop.Name
+                                "Data"              = $keyData
+                            }
+                        }
+                    }
+                    catch {
+                    }
+
+                    $subKeys = Get-ChildItem -Path "Registry::$keyPath" -ErrorAction SilentlyContinue
+                    foreach ($subKey in $subKeys) {
+                        try {
+                            $subKeyValues = Get-ItemProperty -Path "Registry::$subKey" -ErrorAction Stop
+                            foreach ($subProp in $subKeyValues.PSObject.Properties) {
+                                $subKeyData = $subProp.Value
+
+                                if ($subProp.Name -ne "PSPath" -and  $subProp.Name -ne "PSParentPath" -and  $subProp.Name -ne "PSChildName" -and  $subProp.Name -ne "PSProvider") {
+                                    $keys += @{
+                                        "Module"            = "Key Abnormally"
+                                        "Category"          = "key"
+                                        "Entry Location"    = "$keyPath\$($subKey.PSChildName)\$($subProp.Name)"
+                                        "Entry"             = $subProp.Name
+                                        "Data"              = $subKeyData
+                                    }
+                                }
+                            }
+                        }
+                        catch {
+                        }
+                    }
+                }
+            }
+        }
+        catch {
+            $errorlog = "+ [Get-RegKeyAbnormally]: Error $($_.Exception.Message)"
+            Add-Content -Path $logFilePath -Value $errorlog
+        }
+    }
+
+    return $keys
+}
+
+function Get-LocalUsers { 
+    $userList = @()
+    
+    try {
+        $computer = [ADSI]"WinNT://$env:COMPUTERNAME,computer"
+        $users = $computer.psbase.Children | Where-Object { $_.psbase.schemaclassname -eq 'user' }
+        
+        foreach ($user in $users) {
+            # Khởi tạo các giá trị mặc định
+            $userInfo = @{
+                "Username"              = "N/A" 
+                "Enabled"               = "N/A" 
+                "LastLogon"             = "N/A" 
+                "PasswordAge"    		= "N/A" 
+                "PasswordExpired"       = "N/A" 
+                "IsAdmin"               = "False"
+                "IsRemoteDesktopUser"   = "True"
+                "Category"              = "Local Users"
+                "Module"                = "Computer Infos"
+            }
+
+            # Gán các giá trị với kiểm tra nếu là mảng chỉ lấy phần tử đầu tiên
+            try { 
+                $userInfo["Username"] = $user.Name[0] -as [string]
+            }
+            catch {
+				$userInfo["Username"] = "N/A"
+			}
+
+            try { 
+				if ($user.AccountDisabled -eq $false) {
+					$userInfo["Enabled"] = "True"
+				}
+				else {
+					$userInfo["Enabled"] = "False"
+				}
+            }
+            catch {
+				$userInfo["Enabled"] = "N/A"
+			}
+
+            try { 
+				$lastlogon = $user.LastLogin[0] -as [string]
+				try {
+					if (![string]::IsNullOrEmpty($lastlogon)) {
+						if ($lastlogon -match '^\d{1,2}/\d{1,2}/\d{4} \d{2}:\d{2}:\d{2}$') {
+							$userInfo["LastLogon"] = [datetime]::ParseExact($lastlogon, "M/d/yyyy HH:mm:ss", $null).ToString("yyyy/MM/dd HH:mm:ss")
+						}
+					}
+					else {
+						$userInfo["LastLogon"] = "0000/00/00 00:00:00"
+					}
+				}
+				catch {
+					$userInfo["LastLogon"] = "0000/00/00 00:00:00"
+				}
+            }
+            catch {
+				$userInfo["LastLogon"] = "0000/00/00 00:00:00"
+			}
+
+            try { 
+                $userInfo["PasswordAge"] = $user.PasswordAge[0] -as [string]
+            }
+            catch {}
+
+            try { 
+                $userInfo["PasswordExpired"] = $user.PasswordExpired[0] -as [string]
+            }
+            catch {
+				$userInfo["PasswordExpired"] = "N/A"
+			}
+
+            # Kiểm tra xem user có thuộc nhóm Admin hoặc Remote Desktop Users không
+            try {
+                $userGroups = Get-LocalGroup -ErrorAction SilentlyContinue
+                foreach ($group in $userGroups) {
+                    $gusers = Get-LocalGroupMember -Group $group.Name -ErrorAction SilentlyContinue
+                    foreach ($guser in $gusers) {
+                        # Tách tên người dùng nếu có định dạng DOMAIN\UserName và so sánh sau khi chuyển sang lowercase
+                        if (($guser.Name.Split('\')[-1]).ToLower() -eq $userInfo["Username"].ToLower()) {
+                            if ($group.Name -eq "Administrators") { $userInfo["IsAdmin"] = "True" }
+                            elseif ($group.Name -eq "Remote Desktop Users") { $userInfo["IsRemoteDesktopUser"] = "False" }
+                        }
+                    }
+                }
+            }
+            catch {
+                $errorlog = "+ [Get-LocalUsers]: Check group user. Error $($_.Exception.Message)"
+                Add-Content -Path $logFilePath -Value $errorlog
+            }
+
+            $userList += $userInfo
+        }
+    }
+    catch {
+        $errorlog = "+ [Get-LocalUsers]: Get users list. Error $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+
+    return $userList
+}
+
+function Get-ProgramsInstalled {
+    $path = @("HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*", 
+              "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*")
+    
+    $programs = $null
+
+    try {
+        $programs = $path | Get-ItemProperty | Where-Object { 
+            $_.DisplayName -ne $null -and $_.DisplayName -ne "" 
+        } | Select-Object DisplayName, DisplayVersion, InstallDate, InstallLocation, Publisher | ForEach-Object {
+            # Thêm các thuộc tính Category và Module
+            $_ | Add-Member NoteProperty Category "Programs Installed" -Force
+            $_ | Add-Member NoteProperty Module "Computer Infos" -Force
+
+            # Kiểm tra và thay thế các trường null thành "N/A"
+            $_ | ForEach-Object {
+                $_.PSObject.Properties | ForEach-Object {
+                    if ($_.Value -eq $null) {
+                        $_.Value = "N/A"
+                    }
+                }
+            }
+			
+			try {
+				if (![string]::IsNullOrEmpty($_.InstallDate) -and $_.InstallDate -ne "N/A") {
+					if ($_.InstallDate -match '^\d{8}$') {
+						$_.InstallDate = [datetime]::ParseExact($_.InstallDate, "yyyyMMdd", $null).ToString("yyyy/MM/dd 00:00:00")
+					}
+				}
+				else {
+					$_.InstallDate = "0000/00/00 00:00:00"
+				}
+			}
+			catch {
+				$_.InstallDate = "0000/00/00 00:00:00"
+			}
+
+            $_
+        }
+    }
+    catch {
+        $errorlog = "+ [Get-ProgramsInstalled]: Error $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+
+    return $programs
+}
+
+function Get-SystemInfo {
+    $hostname   = $env:COMPUTERNAME
+    $ipAddress  = Get-IPv4
+    $macAddress = Get-MAC
+	$macAddress = $macAddress -replace ":", ""
+
+    try {
+        $os                     = Get-CimInstance -ClassName Win32_OperatingSystem
+        $osName                 = $os.Caption
+
+        $installedDate          = $os.InstallDate
+        $formattedInstalledDate = $installedDate.ToString("yyyy/MM/dd HH:mm:ss")
+
+        $bootTime               =$os.LastBootUpTime
+        $formattedBootTime      = $bootTime.ToString("yyyy/MM/dd HH:mm:ss")
+    }
+    catch {
+        $osName                 = "N/A"
+        $formattedInstalledDate = "0000/00/00 00:00:00"
+        $formattedBootTime      = "0000/00/00 00:00:00"
+        $errorlog = "+ [Get-ComputerInfo]: Get OS info. Error $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+
+    
+    # check audit Account Logon and Success
+    $auditLogon = "Not Configured"
+    try {
+        $accountLogonAudit = (auditpol /get /category:"Logon/Logoff" | Select-String -Pattern "(?=.*Logon)(?=.*Success)")
+        if ($accountLogonAudit) {
+            $auditLogon = "Configured"
+        }
+    }
+    catch {
+        $auditLogon = "Access denied"
+    }
+
+    # check audit Account Management
+    $auditAccount = "Not Configured"
+    try {
+        $accountManagementAudit = (auditpol /get /category:"Account Management" | Select-String -Pattern "(?=.*User Account Management)(?=.*Success)")
+        if ($accountManagementAudit) {
+            $auditAccount = "Configured"
+        } 
+    }
+    catch {
+        $auditAccount = "Access denied"
+    }
+
+    # check audit Process Creation
+    $auditProcess = "Not Configured"
+    try {
+        $processCreationAudit = (auditpol /get /category:"Detailed Tracking" | Select-String -Pattern "(?=.*Process Creation)(?=.*Success)")
+        if ($processCreationAudit) {
+            $auditProcess = "Configured"
+        }
+    }
+    catch {
+        $auditProcess = "Access denied"
+    }
+
+    # Tạo đối tượng với thông tin cần thiết
+    $systemInfo = @{
+        "Category"          = "System Info"
+        "Module"            = "Computer Infos"
+        "HostName"          = $hostname
+        "IPAddress"        	= $ipAddress
+        "MacAddress"        = $macAddress
+        "OSName"            = $osName
+        "InstallDate"     	= $formattedInstalledDate
+        "BootDate"          = $formattedBootTime
+        "AccountLogonAudit"         = $auditLogon
+        "AccountManagementAudit"    = $auditAccount
+        "ProcessCreationAudit"      = $auditProcess
+    }
+
+    return $systemInfo
+}
+
+function Get-ComputerInfo {
+    $computerInfo = @()
+
+    try {
+        # add system info
+        $systemInfo = Get-SystemInfo
+        if ($systemInfo) {
+            $computerInfo += $systemInfo
+        }
+    }
+    catch {
+        $errorlog = "+ [Get-ComputerInfo]: Add systemInfo. Error $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+
+    try {
+        # add local users
+        $localUsers = Get-LocalUsers
+        if ($localUsers) {
+            $computerInfo += $localUsers
+        }
+    }
+    catch {
+        $errorlog = "+ [Get-ComputerInfo]: Add localUsers. Error $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+
+    try {
+        # add program installed
+        $programsInstalled = Get-ProgramsInstalled
+        if ($programsInstalled) {
+            $computerInfo += $programsInstalled
+        }
+    }
+    catch {
+        $errorlog = "+ [Get-ComputerInfo]: Add programsInstalled. Error $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorlog
+    }
+
+    return $computerInfo
+}
+
+# Encrypt content with key 
+function EncryptContent {
+    param (
+        [byte[]]$content,
+        [string]$key
+    )
+    $keyBytes = [System.Text.Encoding]::UTF8.GetBytes($key)
+    $keyLength = $keyBytes.Length
+    $output = New-Object byte[] $content.Length
+
+    for ($i = 0; $i -lt $content.Length; $i++) {
+        $output[$i] = $content[$i] -bxor $keyBytes[$i % $keyLength]
+    }
+    return $output
+}
+
+# Send zip file to server
+function Send-ZipFile {
+    param (
+        [string]$zipFilePath,  
+        [string]$serverUrl,   
+        [string]$user,     
+        [string]$pass,   
+        [string]$xorKey  
+    )
+
+    # encode file name
+    $fileName = [System.IO.Path]::GetFileName($zipFilePath)
+    $fileNameBytes = [System.Text.Encoding]::UTF8.GetBytes($fileName)
+    $xorFileName = EncryptContent -content $fileNameBytes -key $xorKey
+    $base64FileName = [System.Convert]::ToBase64String($xorFileName)
+
+    # encode file content
+    $fileContent = [System.IO.File]::ReadAllBytes($zipFilePath)
+    $xorContent = EncryptContent -content $fileContent -key $xorKey
+    $base64Content = [System.Convert]::ToBase64String($xorContent)
+
+    # create basic authen
+    $authInfo = ("{0}:{1}" -f $user, $pass)
+    $authBytes = [System.Text.Encoding]::UTF8.GetBytes($authInfo)
+    $authHeader = "Basic " + [Convert]::ToBase64String($authBytes)
+    
+    # send http post to uri
+    $headers = @{
+        Authorization = $authHeader
+    }
+    $body = @{
+        logfile = $base64Content
+        filename = $base64FileName
+    }
+
+    $maxRetries = 3
+    $retryCount = 0
+    $response = $null
+    while ($retryCount -lt $maxRetries) {
+        try {
+            # Thực hiện yêu cầu HTTP POST
+            $response = Invoke-RestMethod -Uri $serverUrl -Method Post -Headers $headers -Body $body
+            if ($response -and $response.message) {
+                $processLog = "+ [Send-ZipFile]: Upload to server successful! Message: $($response)"
+                Add-Content -Path $logFilePath -Value $processLog
+                Write-Host $processLog
+                return $True
+            } else {
+                $processLog = "+ [Send-ZipFile]: Upload to server failed! Error: $($response)"
+                Add-Content -Path $logFilePath -Value $processLog
+                Write-Host $processLog
+            }
+        } catch {
+            $processLog = "+ [Send-ZipFile]: Error Message: $($_.Exception.Message)"
+            Add-Content -Path $logFilePath -Value $processLog
+            Write-Host $processLog
+        }
+        $retryCount++
+        $processLog = "+ [Send-ZipFile]: Retry in $($retryCount) times ..."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+
+        # Đợi 1 giây trước khi thử lại
+        Start-Sleep -Seconds 3
+    }
+
+    $processLog = "+ [Send-ZipFile]: Upload to server failed at last!"
+    Add-Content -Path $logFilePath -Value $processLog
+    Write-Host $processLog
+	return $False
+}
+
+function Main {    
+    
+    # add log file
+    $startTime = Get-Date
+    $startLog = "Start Time: $startTime - Scan Started"
+    Add-Content -Path $logFilePath -Value $startLog
+    Write-Host $startLog
+
+    try {
+        # make folder to save logs
+        $IPAddress = Get-IPv4
+        $MACAdress = Get-MAC
+        $MACAdress = $MACAdress -replace ":", ""
+        $timestamp = (Get-Date).ToString("yyyyMMddHHmmss")
+        $logfile = "$($env:TEMP)\\Logs\\($($timestamp))-($($env:COMPUTERNAME))-($($IPAddress))-($($MACAdress))"
+        New-Item -Path $logfile -ItemType "directory" -Force | Out-Null
+        $zipfile = (Get-Item $logfile).FullName + ".zip"
+        Set-Location -Path "$($env:TEMP)\\Logs"
+
+        # Call Get-UnsignedProcessesAndDlls and store the result
+        $processLog = "- Running Get-UnsignedProcessesAndDlls..."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+        $unsignedProcessesAndDlls = Get-UnsignedProcessesAndDlls
+        $processLog = "- Completed Get-UnsignedProcessesAndDlls."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+
+        # Call Get-CommonFiles and store the result
+        $processLog = "- Running Get-CommonFiles..."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+        $commonFiles = Get-CommonFiles
+        $processLog = "- Completed Get-CommonFiles."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+
+        # Call Check-OverwrittenBackdoor and store the result
+        $processLog = "- Running Check-OverwrittenBackdoor..."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+        $overwrittenBackdoor = Get-OverwrittenBackdoor
+        $processLog = "- Completed Check-OverwrittenBackdoor."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+
+        $processLog = "- Running Get-RegKeyAbnormally..."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+        $abnormalyKeyJson = Get-RegKeyAbnormally
+        $processLog = "- Completed Get-RegKeyAbnormally."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+
+        $processLog = "- Running Get-ComputerInfo..."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+        $computerInfo = Get-ComputerInfo
+        $processLog = "- Completed Get-ComputerInfo."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+
+        $processLog = "- Running Get-Autorunsc..."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+        $autoruns = Get-Autorunsc
+        $processLog = "- Completed Get-Autorunsc."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+
+        # Combine all results into a single JSON object
+        $results = @{
+            "Computer Infos"            = $computerInfo
+            "Autoruns Entries"          = $autoruns
+            "Process Scanning"          = $unsignedProcessesAndDlls
+            "Common Files"              = $commonFiles
+            "Overwritten Backdoors"     = $overwrittenBackdoor
+            "Key Abnormally"            = $abnormalyKeyJson
+        }
+
+        # Convert the combined results to JSON format
+        $huntingOutput = $results | ConvertTo-Json
+
+        # Save the JSON output to the file
+        $huntingPath = "$($logfile)\\hunting_logs.json"
+        $huntingOutput | Out-File -FilePath $huntingPath -Encoding UTF8
+
+        try {
+            Get-ChildItem $logfile -Recurse | Add-Zip $zipfile
+            Start-Sleep -Seconds 5
+        }
+        catch {
+            Compress-Archive -Path "$logfile\*" -DestinationPath $zipfile
+            Start-Sleep -Seconds 5
+        }
+
+        $processLog = "- Output saved to $zipfile"
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+
+        # upload to server
+        Set-Location -Path "$($env:TEMP)"
+        $processLog = "- Upload logs to server ..."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+        try {
+            $ret = Send-ZipFile -zipFilePath $zipfile -serverUrl "https://..." -user "hunting" -pass "xxx" -xorKey "xxx"
+			if ($ret) {
+				Remove-Item -Path "$($env:TEMP)\Logs" -Recurse -Force -Confirm:$false -ErrorAction Continue
+			}
+        } 
+        catch {
+            $errorLog = "- [Main] Upload to server get error: $($_.Exception.Message)"
+            Add-Content -Path $logFilePath -Value $errorLog
+            Write-Host $errorLog
+        }
+        $processLog = "- Upload logs to server done."
+        Add-Content -Path $logFilePath -Value $processLog
+        Write-Host $processLog
+    } catch {
+        $errorLog = "- [Main] Error occurred: $($_.Exception.Message)"
+        Add-Content -Path $logFilePath -Value $errorLog
+        Write-Host $errorLog
+    } finally {
+        $endTime = Get-Date
+        $endLog = "End Time: $endTime - Scan Finished"
+        Add-Content -Path $logFilePath -Value $endLog
+        Write-Host $endLog
+    }
+}
+
+Main
